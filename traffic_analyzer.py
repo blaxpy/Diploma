@@ -1,5 +1,6 @@
 import socket
 import pickle
+import pygal
 from datetime import datetime
 from scapy.all import *
 
@@ -26,34 +27,38 @@ def inspect_packet(p):
     elif p.name == 'IP' and p.payload.name == 'Raw':
         return ip_protos[p.proto].upper(), {}
     # Matches all TCP and UDP packets
-    elif p.payload and p.name in ('IP', 'IPv6') and p.payload.name in ('TCP', 'UDP'):
-        # Define data variable for TCP or UDP payload to reduce clutter
-        if p.payload.payload:
-            data = p.payload.payload
-        else:
-            data = None
+    elif p.payload and p.name in ('IP', 'IPv6'):
+        if p.payload.name in ('TCP', 'UDP'):
+            # Define data variable for TCP or UDP payload to reduce clutter
+            if p.payload.payload:
+                data = p.payload.payload
+            else:
+                data = None
 
-        try:
-            # Check if we have unparsable data above transport layer like HTTPS in case of TCP
-            if data and data.name == 'Raw':
-                try:
-                    proto_name = socket.getservbyport(p.payload.dport)
-                except socket.error:
-                    proto_name = socket.getservbyport(p.payload.sport)
-                return p.name, p.payload.name, {'al_protocol': proto_name}
-            else:
-                # Raise exception to proceed with inspection
-                raise socket.error
-        except socket.error:
-            if data and data.name == 'Raw':
-                # If destination or source port does not match well known service consider it raw data
-                return p.name, p.payload.name, {'al_protocol': 'data'}
-            elif data:
-                # Return parsable layer above transport layer like DNS, because scapy understands DNS layer
-                return p.name, p.payload.name, {'al_protocol': p.payload.payload.name.lower()}
-            else:
-                # Return transport layer protocol without payload
-                return p.name, p.payload.name, {}
+            try:
+                # Check if we have unparsable data above transport layer like HTTPS in case of TCP
+                if data and data.name == 'Raw':
+                    try:
+                        proto_name = socket.getservbyport(p.payload.dport)
+                    except socket.error:
+                        proto_name = socket.getservbyport(p.payload.sport)
+                    return p.name, p.payload.name, {'al_protocol': proto_name}
+                else:
+                    # Raise exception to proceed with inspection
+                    raise socket.error
+            except socket.error:
+                if data and data.name == 'Raw':
+                    # If destination or source port does not match well known service consider it raw data
+                    return p.name, p.payload.name, {'al_protocol': 'data'}
+                elif data:
+                    # Return parsable layer above transport layer like DNS, because scapy understands DNS layer
+                    return p.name, p.payload.name, {'al_protocol': p.payload.payload.name.lower()}
+                else:
+                    # Return transport layer protocol without payload
+                    return p.name, p.payload.name, {}
+        else:
+            # Return other transport protocols
+            return p.name, p.payload.name, {}
     # Matches packets with special payload like ARP packets with padding
     elif p.payload and (p.payload.name == 'Raw' or p.payload.name == 'Padding'):
         return p.name, {}
@@ -64,6 +69,7 @@ def inspect_packet(p):
     else:
         return inspect_packet(p.payload)
 
+
 start_time = datetime.now()
 
 # There wasn't a complete list of ether_types in scapy so I had to find it online
@@ -71,8 +77,8 @@ ether_types = load_obj('ether_types')
 
 ip_protos = load_obj('ip_protos')
 
-packet_dump = rdpcap('dump.pcap')
-# packet_dump = rdpcap('mpls-basic.pcap')
+# packet_dump = rdpcap('dump.pcap')
+packet_dump = rdpcap('mpls-basic.pcap')
 # packet_dump = rdpcap('conference.pcap')
 
 # Display protocols summary
@@ -107,10 +113,14 @@ for packet in packet_dump:
         else:
             proto_dict[i_proto] = {t_proto: {packet.time: pdict}}
     else:
+        proto = str(proto[0])
         if proto in proto_dict:
             proto_dict[proto].update({packet.time: pdict})
         else:
             proto_dict[proto] = {packet.time: pdict}
+
+# print(proto_dict)
+# exit()
 
 for proto, val in proto_dict.items():
     if isinstance(val.values()[0], dict) and isinstance(val.values()[0].keys()[0], float):
@@ -127,4 +137,21 @@ end_time = datetime.now()
 elapsed_time = end_time - start_time
 print('Elapsed time: ' + str(elapsed_time))
 
+# Create visualizations of gathered statistics
+pie_chart = pygal.Pie()
+pie_chart.title = 'Protocol distribution'
 
+for proto, val in proto_dict.items():
+    quantity = []
+    # proto_and_quantity = {}
+    if isinstance(val.values()[0], dict) and isinstance(val.values()[0].keys()[0], float):
+        for sub_proto, sub_proto_val in val.items():
+            # print(proto, len(sub_proto_val))
+            quantity.append({'value': len(sub_proto_val), 'label': sub_proto, 'style': 'stroke-dasharray: 15, 10, 5, 10, 15'})
+                             # 'style': 'fill: rgba(255, 45, 20, .6); stroke: black; stroke-dasharray: 15, 10, 5, 10, 15'})
+        pie_chart.add(proto, quantity)
+    else:
+        # print(proto, len(val))
+        pie_chart.add(proto, len(val))
+
+pie_chart.render_to_file('protocols.svg')
