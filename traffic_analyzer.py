@@ -4,7 +4,9 @@ import json
 import pickle
 import pygal
 from datetime import datetime
-from collections import OrderedDict
+from collections import defaultdict, OrderedDict
+from random import randint
+from operator import itemgetter
 from scapy.all import *
 
 
@@ -73,6 +75,11 @@ def inspect_packet(p):
         return inspect_packet(p.payload)
 
 
+def get_rand_color():
+    rgb = [randint(0, 255) for x in range(3)]
+    return 'rgba({0}, {1}, {2}, 1)'.format(*rgb)
+
+
 def x_labels_factory(x_interval):
     """Factory function which returns lambda function, that returns x_labels with passed interval"""
     counter = {'c': 0}
@@ -118,26 +125,50 @@ ip_protos = load_obj('ip_protos')
 #     print(ether_json)
 #     exit()
 
-packet_dump = rdpcap('dump.pcap')
+# packet_dump = rdpcap('mac.pcap')
 # packet_dump = rdpcap('new_dump.pcap')
-# packet_dump = rdpcap('mpls-basic.pcap')
+# packet_dump = rdpcap('dump.pcap')
+packet_dump = rdpcap('mpls-basic.pcap')
 # packet_dump = rdpcap('conference.pcap')
 
-# Display protocols summary
-# print(repr(packet_dump))
+# Get protocol summary
+summary = repr(packet_dump).strip('<').strip('>').split()[1:]
+quantity_dict = {}
+for item in summary:
+    p, q = item.split(':')
+    quantity_dict[p] = int(q)
+
+total_quantity = len(packet_dump)
+tcp_udp_quantity = quantity_dict['TCP'] + quantity_dict['UDP']
+other_quantity = quantity_dict['Other']
 
 proto_dict = {}
+frame_sizes = defaultdict(lambda: 0)
 packet_time_size = OrderedDict()
 
 for packet in packet_dump:
     packet_size = len(packet)
+
+    if packet_size <= 64:
+        frame_sizes[64] += 1
+    elif 64 < packet_size <= 128:
+        frame_sizes[128] += 1
+    elif 128 < packet_size <= 256:
+        frame_sizes[256] += 1
+    elif 256 < packet_size <= 512:
+        frame_sizes[512] += 1
+    elif 512 < packet_size <= 1518:
+        frame_sizes[1518] += 1
+    elif packet_size < 1518:
+        frame_sizes[1600] += 1
+
     packet_time_size[packet.time] = packet_size
 
     inspection_result = inspect_packet(packet)
 
-    print(repr(packet))
-    print(inspection_result)
-    print('')
+    # print(repr(packet))
+    # print(inspection_result)
+    # print('')
 
     # UDP or TCP transport layers
     if not isinstance(inspection_result, str):
@@ -187,8 +218,11 @@ end_time = datetime.now()
 elapsed_time = end_time - start_time
 print('Elapsed time: ' + str(elapsed_time))
 
+# print(frame_sizes)
+# exit()
 # for proto in proto_dict:
 #     print(proto, proto_dict[proto])
+
 
 time_period = packet_time_size.keys()[-1] - packet_time_size.keys()[0]
 # print(time_period)
@@ -214,11 +248,17 @@ for pos in range(1, int(time_period)):
 # print(packet_interval_time_size)
 # print(sum(packet_interval_time_size.values()), sum(packet_time_size.values()))
 
+# dark_rotate_style = pygal.style.RotateStyle('#9e6ffe')
+# chart = pygal.StackedLine(fill=True, interpolate='cubic', style=dark_rotate_style)
+
 # Create visualizations of gathered statistics
-pie_chart = pygal.Pie()
+pie_chart = pygal.Pie(formatter=lambda x: '{:.1f}%'.format(x * 100 / total_quantity))
 pie_chart.title = 'Network traffic protocol distribution'
 
-pie_chart_tcp_udp = pygal.Pie()
+pie_chart_no_ip = pygal.Pie(formatter=lambda x: '{:.1f}%'.format(x * 100 / other_quantity))
+pie_chart_no_ip.title = 'Network traffic protocol distribution without IP'
+
+pie_chart_tcp_udp = pygal.Pie(formatter=lambda x: '{:.1f}%'.format(x * 100 / tcp_udp_quantity))
 pie_chart_tcp_udp.title = 'TCP and UDP application protocols'
 
 if 'IP' in proto_dict and 'IPv6' in proto_dict:
@@ -239,35 +279,39 @@ for proto, sub_proto in proto_dict.items():
                 count = 0
                 for s_p in sub_proto[item]:
                     count += len(sub_proto[item][s_p])
-                    s_quantity.append({'value': len(sub_proto[item][s_p]), 'label': s_p})
+                    s_quantity.append(
+                        {'value': len(sub_proto[item][s_p]), 'label': s_p})
                 if ip_ipv6_tags:
                     pie_chart_tcp_udp.add(proto + ': ' + item, s_quantity)
                 else:
                     pie_chart_tcp_udp.add(item, s_quantity)
-                quantity.append({'value': count, 'label': item})
+                quantity.append({'value': count, 'label': item}) #, 'color': get_rand_color()})
             else:
                 quantity.append({'value': len(sub_proto[item].values()), 'label': item})
     pie_chart.add(proto, quantity)
+    if proto not in ('IP', 'IPv6'):
+        pie_chart_no_ip.add(proto, quantity)
 
 pie_chart.render_to_file('protocols.svg')
+pie_chart_no_ip.render_to_file('protocols_no_ip.svg')
 pie_chart_tcp_udp.render_to_file('tcp_and_udp.svg')
 
 # Create config for traffic speed and time chart
-my_config = pygal.Config()
-my_config.title = 'Traffic IO graph'
-my_config.show_legend = False
-my_config.x_title = 'Time hh:mm:ss'
-my_config.y_title = 'Speed in kbit/s'
-my_config.x_label_rotation = 30
+st_chart_config = pygal.Config()
+st_chart_config.title = 'Traffic IO graph'
+st_chart_config.show_legend = False
+st_chart_config.x_title = 'Time hh:mm:ss'
+st_chart_config.y_title = 'Speed in kbit/s'
+st_chart_config.x_label_rotation = 30
 # my_config.interpolate = 'cubic'
-my_config.interpolate = 'hermite'
-my_config.interpolation_parameters = {'type': 'kochanek_bartels', 'b': -1, 'c': 1, 't': 1}
+st_chart_config.interpolate = 'hermite'
+st_chart_config.interpolation_parameters = {'type': 'kochanek_bartels', 'b': -1, 'c': 1, 't': 1}
 # my_config.interpolation_parameters = {'type': 'cardinal', 'c': .75}
-my_config.show_y_guides = True
+st_chart_config.show_y_guides = True
 # my_config.show_x_guides = True
-my_config.width = 1000
+st_chart_config.width = 1000
 
-speed_time_chart = pygal.Line(my_config)
+speed_time_chart = pygal.Line(st_chart_config)
 
 # Define value interval for abscissa
 x_int = len(packet_interval_time_size) // 6
@@ -280,3 +324,40 @@ interval_values = [get_interval_value(s, t) for t, s in packet_interval_time_siz
 
 speed_time_chart.add("", interval_values)
 speed_time_chart.render_to_file('time_chart.svg')
+
+# Create config for traffic speed and time chart
+f_bar_config = pygal.Config()
+f_bar_config.title = 'Frame size distribution'
+f_bar_config.show_legend = False
+f_bar_config.x_title = 'Size groups in bytes'
+f_bar_config.y_title = 'Number of frames'
+# f_bar_config.x_label_rotation = 30
+# my_config.interpolate = 'cubic'
+# f_bar_config.interpolate = 'hermite'
+# f_bar_config.interpolation_parameters = {'type': 'kochanek_bartels', 'b': -1, 'c': 1, 't': 1}
+# my_config.interpolation_parameters = {'type': 'cardinal', 'c': .75}
+f_bar_config.show_y_guides = True
+f_bar_config.rounded_bars = 10
+# my_config.show_x_guides = True
+f_bar_config.width = 1000
+f_bar_config.formatter = lambda x: '{:.1f}%'.format(x * 100 / total_quantity)
+
+# style = pygal.style.LightenStyle
+# dark_lighten_style = style('#564324')
+
+frame_sizes_bar = pygal.Bar(f_bar_config)
+
+frame_sizes_bar.x_labels = sorted(frame_sizes.keys())
+
+# x_range = len(frame_sizes)
+# for pos, (size, value) in enumerate(sorted(frame_sizes.items())):
+#     x_range_labels = [0]*x_range
+#     x_range_labels[pos] = value
+#     frame_sizes_bar.add(str(size), x_range_labels)
+
+frame_sizes_values = [
+    {'value': val, 'color': get_rand_color()} for
+    item, val in sorted(frame_sizes.items(), key=itemgetter(0))]
+frame_sizes_bar.add("", frame_sizes_values)
+
+frame_sizes_bar.render_to_file('frame_sizes.svg')
