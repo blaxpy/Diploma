@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 import socket
-import json
 import pickle
 import pygal
 from datetime import datetime
@@ -21,6 +20,12 @@ def load_obj(name):
     """Loads object with pickle by reading binary file"""
     with open(name + '.pkl', 'rb') as f:
         return pickle.load(f)
+
+
+def render_chart(chart, name):
+    """Saves chart in svg and png formats"""
+    chart.render_to_png(filename='%s.png' % name)
+    chart.render_to_file(filename='%s.svg' % name)
 
 
 def inspect_packet(p):
@@ -43,7 +48,8 @@ def inspect_packet(p):
 
             try:
                 # Check if we have unparsable data above transport layer like HTTPS in case of TCP
-                if data and data.name in ('Raw', 'Payload'):
+                # if data and data.name in ('Raw', 'Padding'):
+                if data and data.name == 'Raw':
                     try:
                         al_proto_name = socket.getservbyport(p.payload.sport)
                     except socket.error:
@@ -67,7 +73,7 @@ def inspect_packet(p):
             return p.name, p.payload.name
     # Matches packets with special payload like ARP packets with padding
     elif p.payload and (p.payload.name == 'Raw' or p.payload.name == 'Padding'):
-        return p.name
+        return p.__class__.__name__
     # Matches packets without payload like ARP
     elif not p.payload:
         return p.name
@@ -111,27 +117,16 @@ def values_factory(x_interval):
     return lambda speed, dtime: func(speed, dtime)
 
 
+# Record script's start time
 start_time = datetime.now()
 
-# There wasn't a complete list of ether_types in scapy so I had to find it online
+# There wasn't a complete list of EtherTypes in scapy so I had to find it online
 ether_types = load_obj('ether_types')
 
 ip_protos = load_obj('ip_protos')
 
-# with io.open('ether.json', 'wb') as f:
-#     json.dump(ether_types, codecs.getwriter('utf-8')(f), ensure_ascii=False)
-#
-# with open('ether.json', 'rb') as f:
-#     ether_json = json.load(f)
-#     print(ether_json)
-#     exit()
-
-# filename = 'new_dump.pcap'
-# filename = 'mac.pcap'
 filename = 'mac2.pcap'
-# filename = 'dump.pcap'
 # filename = 'mpls-basic.pcap'
-# filename = 'conference.pcap'
 
 packet_dump = PcapReader(filename)
 
@@ -157,19 +152,18 @@ packet_interval_time_speed = OrderedDict()
 packet_dump_time = PcapReader(filename)
 
 enough = 0
+enough_value = 10000
 
 first_time = last_time = next(packet_dump_time)
 for last_time in packet_dump_time:
     enough += 1
-    if enough == 5000:
+    if enough == enough_value:
         break
-        # pass
 
 first_time = first_time.time
 last_time = last_time.time
 
 time_period = last_time - first_time
-# print(time_period)
 
 interval = time_period / 20
 
@@ -186,23 +180,25 @@ for packet in packet_dump:
 
         # Regulate the quantity of parsed packets
         enough += 1
-        if enough == 5000:
+        if enough == enough_value:
             break
 
         packet_size = len(packet)
 
         if packet_size <= 64:
             frame_sizes[64] += 1
-        elif 64 < packet_size <= 128:
-            frame_sizes[128] += 1
-        elif 128 < packet_size <= 256:
-            frame_sizes[256] += 1
-        elif 256 < packet_size <= 512:
-            frame_sizes[512] += 1
-        elif 512 < packet_size <= 1518:
+        elif 64 < packet_size <= 127:
+            frame_sizes[127] += 1
+        elif 128 < packet_size <= 255:
+            frame_sizes[255] += 1
+        elif 256 < packet_size <= 511:
+            frame_sizes[511] += 1
+        elif 512 < packet_size <= 1023:
+            frame_sizes[1023] += 1
+        elif 1024 < packet_size <= 1517:
+            frame_sizes[1517] += 1
+        elif packet_size >= 1518:
             frame_sizes[1518] += 1
-        elif packet_size < 1518:
-            frame_sizes[1600] += 1
 
         # print(left_border, right_border)
         # print(packet.time)
@@ -240,7 +236,6 @@ for packet in packet_dump:
                     proto_dict[i_proto] = {t_proto: {al_proto: {'quantity': 1, 'volume': packet_size}}}
             # Other transport layers
             elif len(inspection_result) == 2:
-                other_quantity += 1
                 i_proto, t_proto = inspection_result
                 if i_proto in proto_dict:
                     if t_proto in proto_dict[i_proto]:
@@ -260,8 +255,7 @@ for packet in packet_dump:
             else:
                 proto_dict[proto] = {'quantity': 1, 'volume': packet_size}
     except IndexError:
-        # Some packets have crippled format so the len function and inspection doesn't work
-        # print('Achtung!')
+        # Some packets might have crippled format so the len function and inspection doesn't work
         pass
 
 end_time = datetime.now()
@@ -309,9 +303,9 @@ for proto, sub_proto in proto_dict.items():
     if proto not in ('IP', 'IPv6'):
         pie_chart_no_ip.add(proto, quantity)
 
-pie_chart.render_to_file('protocols.svg')
-pie_chart_no_ip.render_to_file('protocols_no_ip.svg')
-pie_chart_tcp_udp.render_to_file('tcp_and_udp.svg')
+render_chart(pie_chart, name='protocols')
+render_chart(pie_chart_no_ip, name='protocols_no_ip')
+render_chart(pie_chart_tcp_udp, name='tcp_and_udp')
 
 # Create config for traffic speed and time chart
 st_chart_config = pygal.Config()
@@ -324,8 +318,6 @@ st_chart_config.interpolate = 'hermite'
 st_chart_config.interpolation_parameters = {'type': 'kochanek_bartels', 'b': -1, 'c': 1, 't': 1}
 st_chart_config.formatter = lambda x: '{:.2f}'.format(x)
 st_chart_config.show_y_guides = True
-# my_config.show_x_guides = True
-# st_chart_config.width = 800
 
 speed_time_chart = pygal.Line(st_chart_config)
 
@@ -339,9 +331,10 @@ get_interval_value = values_factory(x_int)
 interval_values = [get_interval_value(s, t) for t, s in packet_interval_time_speed.items()]
 
 speed_time_chart.add("", interval_values)
-speed_time_chart.render_to_file('time_chart.svg')
 
-# Create config for traffic speed and time chart
+render_chart(speed_time_chart, 'time_chart')
+
+# Create config for frame sizes histogram
 f_bar_config = pygal.Config()
 f_bar_config.title = u'Распределение по размеру кадров'
 f_bar_config.show_legend = False
@@ -349,16 +342,24 @@ f_bar_config.x_title = u'Размерные группы в байтах'
 f_bar_config.y_title = u'Количество кадров'
 f_bar_config.show_y_guides = True
 f_bar_config.rounded_bars = 10
-# my_config.show_x_guides = True
-# f_bar_config.width = 1000
+f_bar_config.print_values = True
+f_bar_config.print_values_position = 'top'
 f_bar_config.formatter = lambda x: '{:.1f}%'.format(x * 100 / total_quantity)
 
 frame_sizes_bar = pygal.Bar(f_bar_config)
 
-frame_sizes_bar.x_labels = sorted(frame_sizes.keys())
+frame_sizes_labels = [u'\u226464',
+                      '64-127',
+                      '128-255',
+                      '256-511',
+                      '512-1023',
+                      '1024-1517',
+                      u'\u22651518']
+
+frame_sizes_bar.x_labels = frame_sizes_labels
 
 frame_sizes_values = [{'value': val, 'color': get_rand_color()} for item, val in
                       sorted(frame_sizes.items(), key=itemgetter(0))]
 frame_sizes_bar.add("", frame_sizes_values)
 
-frame_sizes_bar.render_to_file('frame_sizes.svg')
+render_chart(frame_sizes_bar, name='frame_sizes')
