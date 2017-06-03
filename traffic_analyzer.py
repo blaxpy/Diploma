@@ -6,7 +6,6 @@ import pygal
 from datetime import datetime
 from collections import defaultdict, OrderedDict
 from random import randint
-from operator import itemgetter
 from scapy.all import *
 
 
@@ -34,9 +33,6 @@ def inspect_packet(p):
     # Matches L2 VPN packets like MPLS
     if p.name == 'Ethernet' and p.payload.name == 'Raw':
         return ether_types[p.type].upper()
-    # Matches packets with unparsable transport layer protocols like EIGRP
-    elif p.name == 'IP' and p.payload.name == 'Raw':
-        return ip_protos[p.proto].upper()
     # Matches all TCP and UDP packets
     elif p.payload and p.name in ('IP', 'IPv6'):
         if p.payload.name in ('TCP', 'UDP'):
@@ -48,7 +44,6 @@ def inspect_packet(p):
 
             try:
                 # Check if we have unparsable data above transport layer like HTTPS in case of TCP
-                # if data and data.name in ('Raw', 'Padding'):
                 if data and data.name == 'Raw':
                     try:
                         al_proto_name = socket.getservbyport(p.payload.sport)
@@ -68,6 +63,9 @@ def inspect_packet(p):
                 else:
                     # Return transport layer protocol without payload
                     return p.name, p.payload.name, 'no payload'
+        # Matches packets with unparsable transport layer protocols like EIGRP
+        elif p.payload.name == 'Raw':
+            return p.name, ip_protos[p.proto].upper()
         else:
             # Return other transport protocols like ICMP
             return p.name, p.payload.name
@@ -125,21 +123,9 @@ ether_types = load_obj('ether_types')
 
 ip_protos = load_obj('ip_protos')
 
-filename = 'mac2.pcap'
-# filename = 'mpls-basic.pcap'
+filename = 'dump.pcap'
 
 packet_dump = PcapReader(filename)
-
-# Get protocol summary if we use rdpcap()
-# summary = repr(packet_dump).strip('<').strip('>').split()[1:]
-# quantity_dict = {}
-# for item in summary:
-#     p, q = item.split(':')
-#     quantity_dict[p] = int(q)
-
-# total_quantity = sum(quantity_dict.values())
-# tcp_udp_quantity = quantity_dict['TCP'] + quantity_dict['UDP']
-# other_quantity = quantity_dict['Other']
 
 total_quantity = 0
 tcp_udp_quantity = 0
@@ -151,58 +137,43 @@ packet_interval_time_speed = OrderedDict()
 
 packet_dump_time = PcapReader(filename)
 
-enough = 0
-enough_value = 10000
-
 first_time = last_time = next(packet_dump_time)
 for last_time in packet_dump_time:
-    enough += 1
-    if enough == enough_value:
-        break
+    pass
 
 first_time = first_time.time
 last_time = last_time.time
 
 time_period = last_time - first_time
 
-interval = time_period / 20
+interval = time_period / 25
 
 left_border = first_time
 right_border = first_time + interval
 
 interval_volume = 0
 pos = 1
-enough = 0
 
 for packet in packet_dump:
     try:
         total_quantity += 1
 
-        # Regulate the quantity of parsed packets
-        enough += 1
-        if enough == enough_value:
-            break
-
         packet_size = len(packet)
 
         if packet_size <= 64:
             frame_sizes[64] += 1
-        elif 64 < packet_size <= 127:
+        elif 65 <= packet_size <= 127:
             frame_sizes[127] += 1
-        elif 128 < packet_size <= 255:
+        elif 128 <= packet_size <= 255:
             frame_sizes[255] += 1
-        elif 256 < packet_size <= 511:
+        elif 256 <= packet_size <= 511:
             frame_sizes[511] += 1
-        elif 512 < packet_size <= 1023:
+        elif 512 <= packet_size <= 1023:
             frame_sizes[1023] += 1
-        elif 1024 < packet_size <= 1517:
+        elif 1024 <= packet_size <= 1517:
             frame_sizes[1517] += 1
         elif packet_size >= 1518:
             frame_sizes[1518] += 1
-
-        # print(left_border, right_border)
-        # print(packet.time)
-        # print('')
 
         if left_border <= packet.time < right_border:
             interval_volume += packet_size
@@ -263,10 +234,10 @@ elapsed_time = end_time - start_time
 print('Elapsed time: ' + str(elapsed_time))
 
 # Create visualizations of gathered statistics
-pie_chart = pygal.Pie(formatter=lambda x: '{:.1f}%'.format(x * 100 / total_quantity))
+pie_chart = pygal.Pie(formatter=lambda x: '{:.3f}%'.format(x * 100 / total_quantity))
 pie_chart.title = u'Распределение протоколов'
 
-pie_chart_no_ip = pygal.Pie(formatter=lambda x: '{:.1f}%'.format(x * 100 / other_quantity))
+pie_chart_no_ip = pygal.Pie(formatter=lambda x: '{:.3f}%'.format(x * 100 / other_quantity))
 pie_chart_no_ip.title = u'Распределение протоколов без IPv4 и IPv6'
 
 pie_chart_tcp_udp = pygal.Pie(formatter=lambda x: '{:.3f}%'.format(x * 100 / tcp_udp_quantity))
@@ -349,7 +320,7 @@ f_bar_config.formatter = lambda x: '{:.1f}%'.format(x * 100 / total_quantity)
 frame_sizes_bar = pygal.Bar(f_bar_config)
 
 frame_sizes_labels = [u'\u226464',
-                      '64-127',
+                      '65-127',
                       '128-255',
                       '256-511',
                       '512-1023',
@@ -359,7 +330,7 @@ frame_sizes_labels = [u'\u226464',
 frame_sizes_bar.x_labels = frame_sizes_labels
 
 frame_sizes_values = [{'value': val, 'color': get_rand_color()} for item, val in
-                      sorted(frame_sizes.items(), key=itemgetter(0))]
+                      sorted(frame_sizes.items())]
 frame_sizes_bar.add("", frame_sizes_values)
 
 render_chart(frame_sizes_bar, name='frame_sizes')
